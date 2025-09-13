@@ -1,3 +1,4 @@
+
 # app.py
 # ------------------------------------------------------------
 # Conferência XML Reforma Tributária — NF-e (IBS/CBS/IS)
@@ -277,4 +278,72 @@ def build_checklist(root, ibs_pct: float, cbs_pct: float, tol: float) -> pd.Data
         expected_vCBS = (vBC * p_cbs).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         ok_ibs = abs(vIBS - expected_vIBS) <= tol_dec
         ok_cbs = abs(vCBS - expected_vCBS) <= tol_dec
-        add(f"Item {idx}", "VALOR IBS", f"vBC × {ibs_pct:.2f}% (2 casas)", ok_ib
+        add(f"Item {idx}", "VALOR IBS", f"vBC × {ibs_pct:.2f}% (2 casas)", ok_ibs, vIBS, expected_vIBS)
+        add(f"Item {idx}", "VALOR CBS", f"vBC × {cbs_pct:.2f}% (2 casas)", ok_cbs, vCBS, expected_vCBS)
+
+        sum_vBC  += vBC
+        sum_vIBS += vIBS
+        sum_vCBS += vCBS
+
+    # Totais
+    vBC_total  = d(gettext(root, ".//nfe:IBSCBSTot/nfe:vBCIBSCBS"))
+    vIBS_total = d(gettext(root, ".//nfe:IBSCBSTot/nfe:gIBS/nfe:vIBS"))
+    vCBS_total = d(gettext(root, ".//nfe:IBSCBSTot/nfe:gCBS/nfe:vCBS"))
+
+    add("Totais", "IBSCBSTot/vBCIBSCBS", "Σ vBC_itens", sum_vBC == vBC_total, vBC_total, sum_vBC)
+    add("Totais", "IBSCBSTot/gIBS/vIBS", "Σ vIBS_itens", sum_vIBS == vIBS_total, vIBS_total, sum_vIBS)
+    add("Totais", "IBSCBSTot/gCBS/vCBS", "Σ vCBS_itens", sum_vCBS == vCBS_total, vCBS_total, sum_vCBS)
+
+    return pd.DataFrame(checks)
+
+def to_excel_bytes(dfs: dict) -> bytes:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        for sheet, df in dfs.items():
+            df.to_excel(writer, index=False, sheet_name=sheet[:31])  # limite de 31 chars
+    return output.getvalue()
+
+# --------------------- Execução principal ---------------------
+if uploaded is not None:
+    try:
+        root = parse_xml(uploaded.read())
+
+        # Resumo do cabeçalho
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Ambiente (tpAmb)", gettext(root, ".//nfe:ide/nfe:tpAmb") or "—")
+        with col2:
+            st.metric("Emitente (CNPJ)", gettext(root, ".//nfe:emit/nfe:CNPJ") or "—")
+        with col3:
+            st.metric("Destinatário (CNPJ)", gettext(root, ".//nfe:dest/nfe:CNPJ") or "—")
+        with col4:
+            st.metric("UF Destinatário", gettext(root, ".//nfe:dest/nfe:enderDest/nfe:UF") or "—")
+
+        # Quadro Resumo por Item
+        st.subheader("Quadro Resumo por Item")
+        df_quadro = build_quadro(root)
+        st.dataframe(df_quadro, use_container_width=True)
+
+        # Checklist Obrigatório
+        st.subheader("Checklist Obrigatório (com status)")
+        df_check = build_checklist(root, ibs_pct=ibs_pct, cbs_pct=cbs_pct, tol=tolerance_centavos)
+        st.dataframe(df_check, use_container_width=True)
+
+        # Totais (vNF)
+        vNF_text = gettext(root, ".//nfe:total/nfe:ICMSTot/nfe:vNF")
+        st.info(f"**vNF (Valor total da NF):** R$ {d(vNF_text).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):,.2f}")
+
+        # Download Excel
+        st.download_button(
+            label="⬇️ Baixar Excel (Quadro + Checklist)",
+            data=to_excel_bytes({"QuadroResumo": df_quadro, "Checklist": df_check}),
+            file_name="conferencia_xml_reforma_tributaria.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    except ET.ParseError:
+        st.error("Arquivo inválido: não foi possível ler o XML. Verifique o conteúdo.")
+    except Exception as e:
+        st.exception(e)
+else:
+    st.info("Carregue um arquivo **XML** de NF-e para iniciar a conferência.")
