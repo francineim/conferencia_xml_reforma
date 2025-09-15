@@ -3,6 +3,4 @@
 
 streamlit>=1.32.0        # Frontend interativo
 pandas>=2.0.0            # Manipulação de dados
-openpyxl>=3.1.2          # Leitura/escrita Excel (engine padrão)
-xlsxwriter>=3.1.0        # Exportação Excel (engine mais rápido e formatável)
-lxml>=4.9.0              # Parser XML mais robusto e rápido que o ElementTree
+openpyxl>=3.1.2          # Engine de leitura/escrita de arquivos Excel (.xlsx)
