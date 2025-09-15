@@ -1,4 +1,4 @@
-# app_openpyxl.py
+# app.py
 # ------------------------------------------------------------
 # Conferência XML Reforma Tributária — NF-e (IBS/CBS/IS)
 # ------------------------------------------------------------
@@ -6,10 +6,12 @@
 #  - Upload de XML da NF-e (NT 2025.002-RTC ou superior)
 #  - Quadro Resumo por Item (ICMS, PIS, COFINS, IBS, CBS, IPI, TOTAL ITEM)
 #  - Checklist obrigatório com validações automáticas (sem checar ide/idDest)
-#  - Exportação para Excel (quadro + checklist) usando openpyxl
+#  - Download: Excel (.xlsx) SE engine disponível (openpyxl/xlsxwriter),
+#              SENÃO ZIP com CSVs (sem dependências extras)
 # ------------------------------------------------------------
 
 import io
+import zipfile
 import xml.etree.ElementTree as ET
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -168,7 +170,7 @@ def build_quadro(root) -> pd.DataFrame:
         vBC_ibs = d(gettext(g, "nfe:vBC"))
         vIBS    = d(gettext(g, "nfe:vIBS"))
         gCBS    = g.find("nfe:gCBS", ns) if g is not None else None
-        cst_cbs    = cst_ibs          # alguns schemas não separam CST para CBS; ajuste se necessário
+        cst_cbs    = cst_ibs
         cclass_cbs = cclass
         vBC_cbs    = vBC_ibs
         vCBS       = d(gettext(gCBS, "nfe:vCBS") if gCBS is not None else "")
@@ -309,14 +311,39 @@ def build_checklist(root, ibs_pct: float, cbs_pct: float, tol: float) -> pd.Data
 
     return pd.DataFrame(checks)
 
-# --------------------- Exportação Excel (openpyxl) ---------------------
-def to_excel_bytes(dfs: dict) -> bytes:
-    """Gera um .xlsx em memória usando openpyxl (sem precisar do xlsxwriter)."""
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        for sheet, df in dfs.items():
-            df.to_excel(writer, index=False, sheet_name=sheet[:31])  # limite Excel
-    return output.getvalue()
+# --------------------- Exportação: Excel se possível, ZIP-CSV se não ---------------------
+def _choose_excel_engine():
+    """Escolhe engine disponível: openpyxl > xlsxwriter; None se nenhuma instalada."""
+    try:
+        import openpyxl  # noqa: F401
+        return "openpyxl"
+    except ModuleNotFoundError:
+        try:
+            import xlsxwriter  # noqa: F401
+            return "xlsxwriter"
+        except ModuleNotFoundError:
+            return None
+
+def to_export_bytes(dfs: dict):
+    """
+    Se houver engine (openpyxl/xlsxwriter), gera XLSX em memória.
+    Caso contrário, gera um ZIP com os CSVs (sem dependências extras).
+    Retorna (bytes, filename, mime).
+    """
+    engine = _choose_excel_engine()
+    if engine is not None:
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine=engine) as writer:
+            for sheet, df in dfs.items():
+                df.to_excel(writer, index=False, sheet_name=sheet[:31])  # limite de 31 chars
+        return output.getvalue(), "conferencia_xml_reforma_tributaria.xlsx", \
+               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        zbuf = io.BytesIO()
+        with zipfile.ZipFile(zbuf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for sheet, df in dfs.items():
+                zf.writestr(f"{sheet}.csv", df.to_csv(index=False))
+        return zbuf.getvalue(), "conferencia_xml_reforma_tributaria.zip", "application/zip"
 
 # --------------------- Execução Principal ---------------------
 if uploaded is not None:
@@ -340,7 +367,7 @@ if uploaded is not None:
         st.dataframe(df_quadro, use_container_width=True)
 
         # Checklist Obrigatório
-        st.subheader("Checklist Obrigatório (com status)")
+        st.subheader("Checklist)")
         df_check = build_checklist(root, ibs_pct=ibs_pct, cbs_pct=cbs_pct, tol=tolerance_centavos)
         st.dataframe(df_check, use_container_width=True)
 
@@ -349,12 +376,13 @@ if uploaded is not None:
         vNF_fmt = d(vNF_text).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         st.info(f"**vNF (Valor total da NF):** R$ {vNF_fmt:,.2f}")
 
-        # Download Excel
+        # Download (Excel se possível; senão ZIP com CSVs)
+        data_bytes, fname, mime = to_export_bytes({"QuadroResumo": df_quadro, "Checklist": df_check})
         st.download_button(
-            label="⬇️ Baixar Excel (Quadro + Checklist)",
-            data=to_excel_bytes({"QuadroResumo": df_quadro, "Checklist": df_check}),
-            file_name="conferencia_xml_reforma_tributaria.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            label="⬇️ Baixar (Excel se disponível, senão ZIP com CSVs)",
+            data=data_bytes,
+            file_name=fname,
+            mime=mime
         )
 
     except ET.ParseError:

@@ -1,6 +1,2 @@
-# requirements.txt
-# Dependências do projeto Conferência XML Reforma Tributária
-
-streamlit>=1.32.0        # Frontend interativo
-pandas>=2.0.0            # Manipulação de dados
-openpyxl>=3.1.2          # Engine de leitura/escrita de arquivos Excel (.xlsx)
+streamlit>=1.32.0
+pandas>=2.0.0
